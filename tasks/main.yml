@@ -1,0 +1,46 @@
+#SPDX-License-Identifier: MIT-0
+---
+# tasks file for clickhouse-role
+---
+- name: Download ClickHouse packages
+  ansible.builtin.get_url:
+    url: "https://packages.clickhouse.com/rpm/stable/{{ item }}"
+    dest: "/tmp/{{ item }}"
+    mode: "0644"
+    force: false
+  loop:
+    - "clickhouse-common-static-22.10.1.1877.x86_64.rpm"
+    - "clickhouse-server-22.10.1.1877.x86_64.rpm"
+    - "clickhouse-client-22.10.1.1877.x86_64.rpm"
+- name: Install ClickHouse packages from local files
+  become: true
+  ansible.builtin.dnf:
+    name:
+      - "/tmp/clickhouse-common-static-22.10.1.1877.x86_64.rpm"
+      - "/tmp/clickhouse-server-22.10.1.1877.x86_64.rpm"
+      - "/tmp/clickhouse-client-22.10.1.1877.x86_64.rpm"
+    state: present
+    disable_gpg_check: true
+  notify: Start clickhouse service
+- name: Configure ClickHouse to listen on all interfaces
+  ansible.builtin.copy:
+    content: "<clickhouse><listen_host>0.0.0.0</listen_host></clickhouse>\n"
+    dest: /etc/clickhouse-server/config.d/network.xml
+    mode: '0644'
+  notify: Start clickhouse service
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+- name: Create database
+  ansible.builtin.command: "clickhouse-client -q 'create database logs;'"
+  register: create_db
+  failed_when: create_db.rc != 0 and create_db.rc != 82
+  changed_when: create_db.rc == 0
+- name: Check if logs table exists
+  ansible.builtin.command: "clickhouse-client -q 'EXISTS TABLE logs.logs'"
+  register: table_exists
+  changed_when: false
+- name: Create logs table
+  ansible.builtin.command: "clickhouse-client -q 'CREATE TABLE IF NOT EXISTS logs.logs (timestamp String, message String) ENGINE = MergeTree() ORDER BY timestamp;'"
+  register: create_table
+  failed_when: create_table.rc != 0
+  changed_when: table_exists.stdout | trim == '0'
